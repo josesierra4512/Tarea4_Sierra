@@ -370,17 +370,33 @@ con el cierre de Navidad: ahí la semana tiene 5 filas o menos, y el rezago 6 ya
 \paragraph{¿Por qué el logaritmo?} La amplitud del patrón semanal crece con el nivel de la serie (las diferencias
 entre jueves y domingo son mayores en noviembre que en febrero): la estacionalidad es multiplicativa, como en la
 descomposición de 3.1--3.2. El logaritmo la vuelve aditiva y estabiliza la varianza, que es cuando FPP2 recomienda
-transformar. \revisar{Revisamos la convergencia en \texttt{mle\_retvals}; para el modelo que no convergió subimos
-\texttt{maxiter} a 500 y la tabla compara los parámetros antes y después.}
+transformar. \paragraph{Convergencia.} Revisamos \texttt{mle\_retvals['converged']}. S2 convergió con \texttt{maxiter=50};
+S1 no. Al subirlo a 500, S1 convergió y sus parámetros cambiaron mucho: el AR estacional bajó de 0.889 a 0.517, el AR
+regular cambió de signo ($-0.097$ a $0.128$) y el intercepto pasó de 1.05 a 4.27. No es un detalle numérico. La media
+del logaritmo que implica cada versión es $c/[(1-\phi)(1-\Phi)]$: con los parámetros de 50 iteraciones da 8.66, es
+decir $e^{8.66}\approx$ £5\,700 diarios, muy lejos de la venta real; con los de 500 da 10.13, es decir
+$\approx$ £25\,000, que sí es el nivel típico del entrenamiento. Con \texttt{maxiter=50} el optimizador se detuvo
+lejos del máximo de la verosimilitud, probablemente porque arrancó con un AR estacional cercano a 1, donde la
+verosimilitud es muy plana. Por eso en la Parte 5 S1 se reajusta con \texttt{maxiter=500}.
+
+En S2, $\hat\theta=-0.909$ y $\hat\Theta=-0.684$. Un ARIMA(0,1,1) equivale a un suavizamiento exponencial con
+$\alpha=1+\theta$, así que S2 estima el nivel como un promedio ponderado de muchos días ($\alpha\approx0.09$) y el
+patrón semanal como un promedio de varias semanas ($1+\Theta\approx0.32$), en lugar de copiar la última. S2 tiene
+menor AIC (320.9 contra 332.9), pero FPP2 advierte que el AIC no sirve para comparar modelos con distinto orden de
+diferenciación, porque la verosimilitud se calcula sobre datos distintos; la comparación justa es el diagnóstico de
+4.4 y el error de pronóstico de la Parte 5.
 
 \subsection*{4.4 Diagnóstico}
 
 \begin{table}[H]\centering\tabla{p4_diagnostico}\caption{Ljung--Box sobre los residuos (con $m-2$ grados de libertad).}\end{table}
 \begin{figure}[H]\centering\figura[0.95]{p4_acf_sarima}\caption{ACF de los residuos de S1 y S2.}\end{figure}
 
-¿Residuos de ruido blanco al 5\,\%? S1: \cf{ruidoBlancoS1}; S2: \cf{ruidoBlancoS2}. \revisar{S2 deja residuos mucho
-más cercanos a ruido blanco, porque sus dos diferencias quitan el nivel que se mueve y el patrón semanal; S1
-modela el logaritmo alrededor de una media fija y la tendencia de otoño le queda en los residuos.}
+¿Residuos de ruido blanco al 5\,\%? S1: \cf{ruidoBlancoS1}; S2: \cf{ruidoBlancoS2}. S1 reprueba: $Q(6)=9.62$ con $p=0.047$ y $Q(12)=24.70$ con
+$p=0.006$, y su ACF tiene dos rezagos fuera de las bandas, justo en los estacionales: $r_6\approx-0.14$ y
+$r_{12}\approx0.18$. Un solo término AR estacional alrededor de una media fija no alcanza para un patrón semanal cuyo
+nivel se mueve a lo largo del año. S2 pasa con holgura: $Q(6)=3.60$ ($p=0.46$) y $Q(12)=9.27$ ($p=0.51$), y ningún
+rezago de su ACF sale de las bandas. Sus dos diferencias quitan el nivel que se mueve y el patrón semanal, y lo que
+queda es compatible con ruido blanco, que es lo que no logramos en 4.1 ni en 4.2.
 
 \subsection*{4.5 Horizonte largo}
 
@@ -410,8 +426,7 @@ pronosticar el miércoles, $y_{t-1}$ sería el martes, que todavía no ha pasado
 \paragraph{¿Cómo usa S1 el rezago 1?} Pronostica recursivamente: el pronóstico del lunes se usa como si fuera el
 valor observado para pronosticar el martes, y así sucesivamente. Por eso el horizonte de cada objetivo es su
 posición entre los días abiertos y el error crece con el horizonte. En cada reajuste de S1 y S2 usamos el
-\texttt{maxiter} de 4.3 y verificamos \texttt{mle\_retvals['converged']}; \revisar{\cf{noConvergio} ajustes no
-convergieron}.
+\texttt{maxiter} de 4.3 y verificamos \texttt{mle\_retvals['converged']}; de los 64 reajustes (32 orígenes por 2 modelos), el número que no convergió fue \cf{noConvergio}.
 
 \subsection*{5.2 Tres formas de estimar el error}
 
@@ -445,10 +460,20 @@ meses casi planos, y en M2 los coeficientes de $y_{t-7}$ e $y_{t-14}$ estimados 
 tiene el menor error entre los modelos sin SARIMA, a pesar de que copia también los picos aislados (el día de
 £110\,600 del 14 de noviembre lo repite el 21, cuando la venta real fue de £47\,000).
 
-\revisar{En cuanto a S1 y S2: S1 es estacionario y, como vimos en 4.5, regresa a la media del año, así que debería
-comportarse como B1 y quedar entre los peores. S2, con sus dos diferencias, se ancla al nivel reciente como B2,
-pero promedia las semanas anteriores en vez de copiar solo la última, y modela el patrón semanal en escala
-multiplicativa; si en 4.4 deja residuos de ruido blanco, es el candidato natural a ganar.}
+Con SARIMA, el ganador cambia: \textbf{S2 tiene el menor error de todos} (MAE de £12\,356 y RMSE de £15\,696),
+13\,\% menos que B2. Es el modelo que en 4.4 dejaba residuos de ruido blanco, y en prueba combina las dos cosas que
+funcionan: se ancla al nivel reciente, como B2, pero lo estima promediando varias semanas en lugar de copiar solo
+la última, así que no repite los picos aislados (como el del 14 de noviembre). Además modela el patrón semanal en
+escala multiplicativa, que es lo que necesita una temporada en la que todo crece en proporción.
+
+S1 queda quinto (MAE de £16\,703): mucho mejor que B1, porque cada semana se reajusta y arranca desde el nivel
+reciente, pero peor que M1 y M2. Como vimos en 4.5, es estacionario y su pronóstico regresa hacia la media del
+entrenamiento; en un horizonte de una semana esa caída ya le cuesta en una temporada que está por encima de esa media.
+
+La comparación con (b) muestra un último punto: en mayo--septiembre el mejor era M2 (£9\,229) y S2 quedaba cuarto
+(£10\,032). El origen móvil dentro del entrenamiento no anticipó al ganador, porque los meses de prueba son
+distintos de los de validación. Aun así, S2 es el modelo cuyo error menos creció de (b) a (c): 23\,\%, contra 26\,\%
+de B2 y más de 55\,\% de los demás.
 
 \subsection*{5.4 La trampa}
 
