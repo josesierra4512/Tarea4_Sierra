@@ -1,0 +1,19 @@
+data/
+*.xlsx
+*.pkl
+
+# Python / Jupyter
+__pycache__/
+*.py[cod]
+.venv/
+.ipynb_checkpoints/
+
+# LaTeX (se sube solo el .tex y el .pdf)
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+
+.DS_Store
+Thumbs.db

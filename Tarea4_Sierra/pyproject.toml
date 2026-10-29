@@ -1,0 +1,17 @@
+[project]
+name = "tarea4-sierra"
+version = "0.1.0"
+description = "Tarea 4 de Business Intelligence: series de tiempo y RFM con Online Retail (UCI)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "statsmodels>=0.14",
+    "scikit-learn>=1.4",
+    "openpyxl>=3.1",
+    "jupyterlab>=4.2",
+    "ipykernel>=6.29",
+]

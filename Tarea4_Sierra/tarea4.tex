@@ -1,0 +1,574 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{adjustbox}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{caption}
+\usepackage[hidelinks]{hyperref}
+\usepackage{textcomp}
+
+\setlength{\parskip}{4pt}
+\renewcommand{\figurename}{Figura}
+\renewcommand{\tablename}{Tabla}
+\renewcommand{\refname}{Referencias}
+
+% ----------------------------------------------------------------------
+% Las cifras, tablas y figuras las genera el notebook en tablas/ y figuras/.
+% Si falta alguna (porque el notebook no se ha corrido), sale en rojo.
+% ----------------------------------------------------------------------
+\InputIfFileExists{tablas/cifras.tex}{}{}
+\newcommand{\pendiente}{\textcolor{red}{\textbf{[correr notebook]}}}
+\newcommand{\cf}[1]{\ifcsname #1\endcsname\csname #1\endcsname\else\pendiente\fi}
+\newcommand{\tabla}[1]{\IfFileExists{tablas/#1.tex}{\begin{adjustbox}{max width=\textwidth}\input{tablas/#1.tex}\end{adjustbox}}{\pendiente}}
+\newcommand{\figura}[2][0.95]{\IfFileExists{figuras/#2.png}{\includegraphics[width=#1\textwidth]{figuras/#2.png}}{\pendiente}}
+% \revisar marca frases que dependen de cómo salgan sus datos: léanlas contra el notebook y quiten el color.
+\newcommand{\revisar}[1]{\textcolor{orange!80!black}{#1}}
+
+\title{Tarea 4: Introducción a Series de Tiempo\\[2pt]\large Business Intelligence · Universidad del Istmo de Guatemala}
+\author{José Sierra}
+\date{29 de octubre de 2026}
+
+\begin{document}
+\maketitle
+
+\noindent Todo el código está en \texttt{Tarea4\_Sierra.ipynb}; la limpieza, en \texttt{limpiar.py}, y las
+funciones de ACF, Ljung--Box y AR(1), implementadas con numpy, en \texttt{ts\_utils.py}. El notebook corre de principio a
+fin desde \texttt{Online Retail.xlsx} y escribe las figuras en \texttt{figuras/}, las tablas en \texttt{tablas/} y
+las cifras que se citan en el texto en \texttt{tablas/cifras.tex}, así que este documento se actualiza solo al
+volver a compilarlo.
+
+%======================================================================
+\section{Parte 0: Procesos simulados}
+%======================================================================
+
+\subsection*{0.1 Derivaciones a mano}
+
+Sea $Y_t = c + \phi Y_{t-1} + \varepsilon_t$ con $\varepsilon_t \overset{iid}{\sim} N(0,\sigma^2)$, $|\phi|<1$ y el
+proceso estacionario, de modo que $E[Y_t]=E[Y_{t-1}]=\mu$ y $\operatorname{Var}(Y_t)=\operatorname{Var}(Y_{t-1})=\gamma_0$.
+
+\paragraph{Media.} Tomando esperanza a ambos lados y usando $E[\varepsilon_t]=0$:
+\[
+\mu = c + \phi\mu \quad\Longrightarrow\quad \mu(1-\phi)=c \quad\Longrightarrow\quad E[Y_t]=\frac{c}{1-\phi}.
+\]
+
+\paragraph{Varianza.} Como $\varepsilon_t$ es independiente del pasado, en particular de $Y_{t-1}$,
+la covarianza entre ambos es cero y
+\[
+\gamma_0 = \operatorname{Var}(c+\phi Y_{t-1}+\varepsilon_t) = \phi^2\gamma_0 + \sigma^2
+\quad\Longrightarrow\quad \operatorname{Var}(Y_t)=\frac{\sigma^2}{1-\phi^2}.
+\]
+
+\paragraph{Autocorrelación.} Restando la media, $Y_t-\mu = \phi(Y_{t-1}-\mu)+\varepsilon_t$. Multiplicando por
+$Y_{t-k}-\mu$ con $k\ge 1$ y tomando esperanza, el término $E[\varepsilon_t(Y_{t-k}-\mu)]$ es cero porque
+$\varepsilon_t$ es independiente de $Y_{t-k}$:
+\[
+\gamma_k = \phi\,\gamma_{k-1} \;\Longrightarrow\; \gamma_k = \phi^k\gamma_0 \;\Longrightarrow\; \rho_k=\frac{\gamma_k}{\gamma_0}=\phi^k.
+\]
+
+\paragraph{Caminata aleatoria.} Con $\phi=1$, $c=0$ y $Y_0=0$, iterando, $Y_t=\sum_{j=1}^t\varepsilon_j$. Como los
+$\varepsilon_j$ son independientes,
+\[
+\operatorname{Var}(Y_t)=\sum_{j=1}^t\operatorname{Var}(\varepsilon_j)=t\sigma^2.
+\]
+La varianza crece con $t$, así que no es constante en el tiempo y se viola la definición de estacionariedad débil.
+Además $\operatorname{Cov}(Y_t,Y_{t-k})=(t-k)\sigma^2$ depende de $t$ y no solo de $k$. Por eso las fórmulas de
+arriba no aplican: con $\phi=1$, $\sigma^2/(1-\phi^2)$ ``explota''.
+
+\subsection*{0.2 Simulación}
+
+Cada trayectoria tiene $n=300$ pasos después de descartar 200 de calentamiento, con $c=0$ y $\sigma=1$. La
+figura~\ref{fig:real} muestra una realización de cada $\phi$: con $\phi=0$ la serie cruza la media constantemente;
+con $\phi=0.9$ hace rachas largas, y con $\phi=1$ deambula sin volver a ningún nivel.
+
+\begin{figure}[H]\centering\figura[0.85]{p0_realizaciones}
+\caption{Una realización de cada AR(1).}\label{fig:real}\end{figure}
+
+Para $\phi=1$ el calentamiento no borra el valor inicial (la caminata nunca olvida), pero eso no afecta a $r_k$:
+el valor de arranque suma la misma constante a todas las observaciones, y $r_k$ resta la media muestral antes
+de multiplicar, así que la constante se cancela.
+
+La tabla~\ref{tab:02} resume 5\,000 réplicas por escenario, con una semilla distinta para cada uno
+(documentadas en el notebook). EE es el error estándar del promedio: la desviación estándar entre réplicas
+dividida entre $\sqrt{5000}$ (para la tasa de rechazo, $\sqrt{p(1-p)/5000}$).
+
+\begin{table}[H]\centering\small\tabla{p0_tabla02}
+\caption{AR(1) con $n=300$ y 5\,000 réplicas por $\phi$.}\label{tab:02}\end{table}
+
+\subsection*{0.3 Interpretación}
+
+\paragraph{$\phi=0$.} La tasa de rechazo es \cf{rechazoPhiCero}, a menos de un error estándar del 5\,\% que
+esperábamos: bajo ruido blanco $r_1\approx N(0,1/n)$, así que $|r_1|>1.96/\sqrt n$ ocurre el 5\,\% de las veces por
+construcción. El promedio de $r_1$ es ligeramente negativo ($\approx -1/n$), un sesgo conocido de $r_k$ por usar la
+media muestral.
+
+\paragraph{Caminata aleatoria.} La teoría ``estacionaria'' diría $\rho_5=1^5=1$, pero el promedio de $r_5$ es
+\cf{rCincoPhiUno}. La fórmula $\rho_k=\phi^k$ supone estacionariedad, que aquí no existe: $\bar y$ no es la media
+de nada, y en una muestra finita $r_k$ siempre queda por debajo de 1 y decae despacio. Esa caída lenta es justamente
+la pista visual de no estacionariedad.
+
+\paragraph{Sesgo del OLS.} El estimado de $\phi$ es sistemáticamente menor que el verdadero, y el sesgo crece con
+$\phi$: \cf{sesgoPhiCero}, \cf{sesgoPhiMedio}, \cf{sesgoPhiNueve} y \cf{sesgoPhiUno} para $\phi=0,\ 0.5,\ 0.9,\ 1$.
+Los errores estándar son de $10^{-3}$ o menos, así que el sesgo no es ruido de simulación. Coincide con la
+aproximación de Kendall, $-(1+3\phi)/n$ ($-0.0033$, $-0.0083$, $-0.0123$), y para $\phi=1$ con el sesgo de
+Dickey--Fuller con intercepto, cerca de $-5.3/n\approx-0.018$. El estimador es consistente (el sesgo es de orden
+$1/n$ y desaparece cuando $n$ crece), pero en muestras finitas subestima la memoria, más cuanto más persistente es
+el proceso.
+
+\subsection*{0.4 Las dos razones para reprobar}
+
+\begin{table}[H]\centering\small\tabla{p0_tabla04}
+\caption{Procesos sin memoria con media cambiante; 5\,000 réplicas.}\label{tab:04}\end{table}
+
+\begin{figure}[H]\centering\figura[0.95]{p0_dos_razones}
+\caption{Arriba: una realización y su media $m_t$. Abajo: ACF promedio de 5\,000 réplicas con bandas $\pm1.96/\sqrt n$.}\label{fig:dos}\end{figure}
+
+\paragraph{La tendencia reprueba sin tener memoria.} Rechaza la prueba de retardo 1 en el \cf{rechazoUnoTendencia}
+de las réplicas, con $\bar r_1=\cf{rUnoTendencia}$, aunque los $\varepsilon_t$ son independientes. Los días de la
+parte alta de la tendencia quedan todos sobre $\bar y$ y sus vecinos también, así que el producto
+$(y_t-\bar y)(y_{t-1}-\bar y)$ es positivo casi siempre. Su ACF (figura~\ref{fig:dos}) baja muy despacio: es la
+razón (2).
+
+\paragraph{El patrón semanal pasa aunque tiene estructura.} Rechaza solo en el \cf{rechazoUnoSemanal} (poco más del
+5\,\% nominal) porque al rezago 1 casi no hay correlación ($\bar r_1=\cf{rUnoSemanal}$). La estructura vive en el
+rezago 7: $\bar r_7=\cf{rSieteSemanal}$. La prueba mira el rezago equivocado.
+
+\paragraph{Conexión con RANDU.} RANDU pasaba las pruebas de pares consecutivos y aun así todas sus ternas
+$(u_t,u_{t+1},u_{t+2})$ caen en 15 planos. En los dos casos hay una estructura determinista fuerte en una
+dimensión o un rezago que la prueba no mira. Pasar una prueba solo dice que no hay estructura \emph{donde la
+prueba busca}.
+
+\subsection*{0.5 La prueba que sí ve}
+
+\begin{table}[H]\centering\small\tabla{p0_tabla05}
+\caption{Tasa de rechazo al 5\,\% de Ljung--Box con $m=10$ y con $m=\log n\approx\cf{mLog}$.}\label{tab:05}\end{table}
+
+Con ruido blanco, Ljung--Box con $m=10$ rechaza el \cf{lbDiezRuido}: mantiene su tamaño. Ahora el proceso semanal
+se rechaza en el \cf{lbDiezSemanal} de las réplicas (contra \cf{rechazoUnoSemanal} con la prueba de retardo 1),
+y la tendencia en el \cf{lbDiezTendencia}. Ljung--Box suma $r_k^2$ de los rezagos 1 a 10, así que incluye el
+rezago 7, donde está la estructura semanal, y una sola $r_7$ grande basta para que $Q$ sea grande. Además, al
+juntar 10 rezagos en un estadístico evita el problema de las pruebas múltiples.
+
+El enunciado pide comparar con la regla de Tsay, $m\approx\log n=\cf{mLog}$: con $m=6$ el proceso semanal solo se
+rechaza en el \cf{lbLogSemanal}, porque el rezago 7 queda fuera. Es el argumento de FPP2 para usar $m=2s$ con
+estacionalidad: $m$ debe cubrir al menos el periodo estacional.
+
+%======================================================================
+\section{Parte 1: Limpieza}
+%======================================================================
+
+Leímos \texttt{InvoiceNo}, \texttt{StockCode} y \texttt{CustomerID} como texto. Leídos como números,
+\texttt{InvoiceNo} mezcla \texttt{536365} con \texttt{C536379} y la columna queda con tipos mezclados;
+\texttt{StockCode} mezcla \texttt{85123} con \texttt{85123A}, y \texttt{CustomerID}, al tener vacíos, se convierte en
+\texttt{float} (\texttt{17850.0}), lo que rompe los cruces y los conteos por cliente.
+
+\subsection*{1.1 Tamaño}
+
+\begin{table}[H]\centering\tabla{p1_tamano}\caption{La base cruda.}\end{table}
+
+El \cf{fracSinCliente} de las filas no tiene \texttt{CustomerID}.
+
+\subsection*{1.2 Casos y decisiones}
+
+\begin{description}
+\item[(a) Duplicados exactos (\cf{nDuplicados} filas): se van.] Dos filas idénticas en factura, producto, cantidad,
+precio y hora son un doble registro del sistema; dejarlas contaría dos veces la misma venta. Se conserva la primera.
+
+\item[(b) Facturas que no empiezan con dígito: C se queda, A se va.] Hay dos prefijos (tabla~\ref{tab:pref}).
+\texttt{C} son cancelaciones: se quedan y restan el día en que ocurren, como pide la definición de venta neta.
+\texttt{A} son ajustes contables \emph{Adjust bad debt}: no son ventas a un cliente, así que se van.
+
+\item[(c) Códigos que no son productos: se van.] La tabla~\ref{tab:cod} muestra los códigos que no empiezan con cinco
+dígitos. Por su descripción, \texttt{POST}, \texttt{DOT} y \texttt{C2} son cobros de envío; \texttt{AMAZONFEE},
+\texttt{BANK CHARGES} y \texttt{CRUK} son comisiones y cargos; \texttt{M} (Manual), \texttt{D} (Discount),
+\texttt{S} (Samples) y \texttt{B} son ajustes, y \texttt{gift\_...} son vales de regalo. Ninguno es venta de
+mercancía y se van. En cambio \texttt{PADS} y los \texttt{DCGS...} sí son productos y se quedan, igual que los
+códigos con letra al final (\texttt{85123A}), que son variantes de un producto.
+
+\item[(d) Precio cero o negativo (\cf{nPrecioCero} y \cf{nPrecioNeg} filas): se van.] Una línea con precio cero no
+aporta venta. El 98.4\,\% de ellas no tiene cliente y sus descripciones son vacías o del tipo \emph{check},
+\emph{damages}, \emph{found}, \emph{adjustment}: son movimientos de inventario. Los dos precios negativos son los
+ajustes de deuda incobrable (facturas A) de (b).
+
+\item[(e) Cantidades negativas fuera de cancelaciones (\cf{nQNeg} filas): se van.] Las descripciones son del tipo
+\emph{damaged}, \emph{lost}, \emph{?}, \emph{check}: son correcciones de inventario, no devoluciones de clientes.
+El \cf{pctQNegPrecioCero} de ellas tiene precio cero y ninguna tiene cliente, así que la regla (d) ya las elimina
+todas y la regla 6 queda en cero filas.
+
+\item[(f) Sin \texttt{CustomerID}: para la serie se quedan; para la Parte 6 se van.] Representan el
+\cf{pctMontoSinCliente} de la venta bruta y son ventas reales, así que sacarlas sesgaría la serie hacia abajo.
+Para RFM sí se excluyen, porque necesitamos saber quién compró.
+\end{description}
+
+Además agregamos una regla que no estaba en la lista: \textbf{pedidos anulados con un ajuste Manual}. Si un pedido
+grande se cancela con una línea \texttt{M} del mismo cliente y el mismo monto, la regla (c) borra la cancelación y
+deja el pedido vivo, con lo que la limpieza \emph{crearía} una venta que nunca existió. Por eso, antes de (c),
+quitamos esas líneas de venta (ver 1.4).
+
+\begin{table}[H]\centering\small\tabla{p1_prefijos}\caption{Facturas por prefijo.}\label{tab:pref}\end{table}
+\begin{table}[H]\centering\scriptsize\tabla{p1_codigos}\caption{Códigos que no empiezan con cinco dígitos (los 25 más frecuentes).}\label{tab:cod}\end{table}
+
+\subsection*{1.3 Bitácora de limpieza}
+
+Las reglas se aplican en el orden de la tabla~\ref{tab:bit}. El orden importa: la regla 6 no elimina ninguna fila porque la regla 5 ya quitó todas las cantidades negativas
+(todas tenían precio cero), y si se aplicara antes se llevaría 1\,336 filas que hoy cuenta la regla 5. Del mismo modo,
+la regla 3 tiene que ir antes de la 4: después ya no existiría la línea Manual que delata al pedido anulado. El monto con signo dice cuánto
+cambia la venta neta; el monto absoluto, cuánta actividad se tocó.
+
+\begin{table}[H]\centering\tabla{p1_bitacora}\caption{Bitácora de limpieza.}\label{tab:bit}\end{table}
+
+Después de limpiar quedan \cf{nFilasLimpias} filas con una venta neta de \cf{ventaNetaLimpia}.
+
+\subsection*{1.4 Las seis líneas más grandes}
+
+\begin{table}[H]\centering\tabla{p1_top6}\caption{Las seis líneas con mayor $|Quantity\times UnitPrice|$ antes de limpiar
+y su contrapartida.}\label{tab:top6}\end{table}
+
+Las seis líneas son tres pares pedido--anulación. El cliente 16446 pidió 80\,995 unidades de \emph{Paper Craft,
+Little Birdie} (factura 581483, £168\,469.60) el 9 de diciembre a las 9:15 y la canceló 12 minutos después (C581484).
+El cliente 12346 pidió 74\,215 \emph{Medium Ceramic Top Storage Jar} (541431, £77\,183.60) el 18 de enero y lo
+canceló 16 minutos después (C541433). Son los ``pedidos que no deberían existir'': cantidades absurdas para una
+tienda cuyo pedido típico es de decenas de unidades. Nuestra limpieza no los elimina (pedido y cancelación son
+líneas válidas), pero netear por día sí los resuelve: la venta y la cancelación caen el mismo día y se anulan. El
+neto del 18 de enero queda en £17\,067, un día normal, y el 9 de diciembre además se descarta en 2.4.
+
+El tercer par es distinto: el cliente 15098 pidió 60 \emph{Picnic Basket Wicker 60 Pieces} a £649.50 (556444,
+£38\,970) y la anulación no se registró con el producto, sino con una línea \texttt{M} (Manual) de £38\,970
+(C556445). Aquí netear por día no basta si la regla 4 borra el Manual: el 10 de junio quedaría con £38\,970 de
+venta fantasma. Por eso la regla 3 quita ese pedido; con ella el neto del 10 de junio es £21\,937, un día normal.
+
+\subsection*{1.5 Función \texttt{limpiar}}
+
+Toda la limpieza es la función \texttt{limpiar(df)} de \texttt{limpiar.py}. Devuelve el DataFrame limpio con
+columnas \texttt{Venta}, \texttt{Fecha} y \texttt{EsCancelacion}; con \texttt{devolver\_bitacora=True} devuelve
+también la bitácora, y con \texttt{solo\_clientes=True} quita las filas sin cliente para la Parte 6.
+
+%======================================================================
+\section{Parte 2: El calendario}
+%======================================================================
+
+\paragraph{2.1} Entre el primer y el último día de datos, incluyendo ambos, hay \cf{diasCalendario} días calendario,
+y hubo al menos una transacción en \cf{diasConTx}.
+
+\paragraph{2.2} Los \cf{diasCerrados} días sin transacciones se clasifican en la tabla~\ref{tab:cerr}. La tienda
+\textbf{no abre los sábados}: los \cf{nSabados} sábados del rango están vacíos. Los otros 16 días son tres grupos. El
+\textbf{cierre de Navidad}, del viernes 24 de diciembre de 2010 al lunes 3 de enero de 2011 (reabre el 4 de enero),
+que incluye los \emph{bank holidays} sustitutos de Christmas Day, Boxing Day y Año Nuevo. La \textbf{Semana Santa}:
+Good Friday, Easter Monday y también el domingo de Pascua, a pesar de que la tienda sí abre los domingos. Y los
+\textbf{bank holidays de lunes} (2 y 30 de mayo, 29 de agosto) más el viernes 29 de abril, feriado por la boda
+real del príncipe William: ese es el que no se repite cada año.
+
+Los móviles en el sentido de FPP2 son los tres de Semana Santa, porque dependen de la fecha de Pascua: en 2011
+cayeron del 22 al 25 de abril, y en 2010 o 2012 caen en otras semanas, así que un modelo de datos diarios no puede
+aprenderlos con ``el mismo día del año pasado''. Los de mayo y agosto también cambian de fecha, pero siempre son
+lunes, y la boda real es un evento único que ningún modelo puede anticipar con estos datos.
+
+\begin{table}[H]\centering\small\tabla{p2_cerrados}\caption{Días sin transacciones que no son sábado.}\label{tab:cerr}\end{table}
+
+\paragraph{2.3 ¿Cero o faltante?} Depende del uso. Debe ser \textbf{cero} cuando se quiere el total vendido en un
+periodo (venta mensual, presupuesto, flujo de caja) o una media móvil de calendario como la de 3.1: ese día
+realmente no entró dinero. Debe ser \textbf{faltante} cuando se modela la venta de los días en que la tienda opera,
+por ejemplo para estimar el efecto del día de la semana o evaluar un pronóstico: un sábado cerrado no es un día de
+ventas bajas, y tratarlo como cero arrastraría el índice y castigaría a cualquier modelo que no ``prediga'' el
+cierre.
+
+\paragraph{2.4 El último día.} La última factura del 9 de diciembre es a las \cf{horaUltima}, mientras que la mediana
+de la hora de la última factura en los días abiertos es \cf{horaCierreMediana}: el día está incompleto (los datos
+se cortaron a mediodía), aunque su venta neta de la mañana ya sea parecida a la de un viernes completo. Lo quitamos,
+porque compararlo con un día completo haría parecer que las ventas se desplomaron.
+
+%======================================================================
+\section{Parte 3: Tendencia, estacionalidad y autocorrelación}
+%======================================================================
+
+\subsection*{3.1 Tendencia}
+
+\begin{figure}[H]\centering\figura{p3_tendencia}\caption{Venta neta diaria y media móvil centrada de 7 días.}\label{fig:tend}\end{figure}
+
+Usamos 7 días porque es el periodo de la estacionalidad: cada ventana contiene exactamente un día de cada día de
+la semana, así que el patrón semanal se promedia y desaparece. Con 5 días las ventanas incluirían unas veces el
+sábado cerrado y otras no, y la media oscilaría con el patrón semanal; con 30 se borraría el patrón, pero también
+los cambios de la tendencia en el mes (por ejemplo la subida de noviembre). Es centrada para que el valor de cada
+día sea un promedio de tres días antes y tres después, sin desfasar la tendencia; una media hacia atrás llegaría
+tarde a cada cambio.
+
+Diciembre de 2010 arranca alto (la media móvil está cerca de £40\,000 diarios), cae a cero en el cierre de
+Navidad y de enero a agosto se mueve en un rango plano de unos £15\,000 a £30\,000 diarios, con subidas cortas
+como la de mayo. Desde septiembre sube con fuerza y en noviembre pasa de £50\,000: es la temporada en que los
+mayoristas de artículos de regalo se abastecen para Navidad. En total, noviembre vendió £1.43 millones, casi el
+triple que febrero (£0.50 millones), así que la serie no tiene media constante.
+
+\subsection*{3.2 Estacionalidad}
+
+\begin{table}[H]\centering\tabla{p3_indice}\caption{Índice estacional: promedio de $y_t/MA_t$ en los días abiertos del entrenamiento.}\label{tab:ind}\end{table}
+\begin{figure}[H]\centering\figura[0.65]{p3_indice}\caption{Índice estacional por día de la semana.}\end{figure}
+
+El día con mayor índice es el \cf{diaMaxIndice} y el de menor, el \cf{diaMinIndice}. Jueves (\cf{indiceJue}) y martes (\cf{indiceMar})
+venden más de 1.5 veces la media móvil; el domingo vende apenas \cf{indiceDom}, menos de la mitad que un día entre
+semana. Es un día corto y con pocos pedidos mayoristas. El promedio de los seis índices es
+\cf{promIndice} y no 1 porque la media móvil incluye el sábado cerrado con valor cero: el promedio de 7 días es
+aproximadamente $6/7$ del nivel de un día abierto, así que los cocientes de los días abiertos promedian cerca de
+$7/6\approx1.167$. Los feriados empujan en el mismo sentido: una ventana con un feriado tiene dos ceros. Sin las
+ventanas con más de un día cerrado el promedio es \cf{promIndiceLimpio}.
+
+\subsection*{3.3 Autocorrelación}
+
+\begin{figure}[H]\centering\figura[0.8]{p3_acf}\caption{ACF de la venta en los \cf{nTres} días abiertos del entrenamiento (una fila por día).}\label{fig:acf3}\end{figure}
+
+\paragraph{(a)} Con $n=\cf{nTres}$ las bandas son $\pm\cf{bandaTres}$, y se salen \cf{fueraTres} de los 21 rezagos.
+$r_1=\cf{rUnoTres}$, así que la serie no pasa la prueba de retardo 1 de la Tarea 2. El pico está en el rezago
+\cf{picoTres} ($r=\cf{rPicoTres}$). Como en esta serie los sábados no son filas, 6 filas son 7 días calendario:
+el pico es la estacionalidad semanal. Ljung--Box da $Q(6)=\cf{QseisTres}$ ($p=\cf{pseisTres}$) y
+$Q(12)=\cf{QdoceTres}$ ($p=\cf{pdoceTres}$): se rechaza ruido blanco con cualquier nivel razonable.
+
+\paragraph{(b)} Por la Parte 0 sabemos que una ACF así tiene dos posibles fuentes. Los picos en los rezagos 6, 12 y 18
+son la estacionalidad semanal, como el $r_7$ del proceso semanal de la Parte 0.4. Y que casi todos los demás rezagos
+sean positivos, en especial los primeros, es la huella de una media no constante: la tendencia de la
+figura~\ref{fig:tend} hace que los días de septiembre a noviembre queden todos por encima de $\bar y$, igual que en
+el proceso con tendencia de la figura~\ref{fig:dos}. Ninguna de las dos es memoria. Lo que quede después de
+quitarlas sí será memoria, y eso es lo que mide la Parte 4.
+
+%======================================================================
+\section{Parte 4: Del AR(1) al SARIMA}
+%======================================================================
+
+\subsection*{4.1 Quitar el día de la semana}
+
+\begin{figure}[H]\centering\figura[0.8]{p4_acf_dow}\caption{ACF de los residuos de la regresión contra los seis indicadores de día.}\end{figure}
+
+El pico en el rezago 6 desaparece: antes era el mayor ($r_6=\cf{rPicoTres}$) y ahora es uno más, porque las
+indicadoras capturan el nivel promedio de cada día. Pero siguen fuera de las bandas \cf{fueraCuatroUno} rezagos, y la
+forma no es la de un AR(1). Con $r_1=\cf{rUnoCuatroUno}$, un AR(1) daría $r_2\approx0.08$ y $r_3\approx0.02$; en
+cambio, los rezagos 1 a 6 se quedan todos entre 0.21 y 0.30, y solo después caen. Es la meseta de la ACF del proceso
+con tendencia de la Parte 0.4: semanas enteras de días por encima (o por debajo) del promedio, porque el nivel de la
+serie se mueve. Al modelo le falta la tendencia (el nivel que se
+mueve en el año); mientras esté en los residuos, cualquier prueba va a reprobar por la razón (2).
+
+\subsection*{4.2 AR(1) sobre los residuos}
+
+\begin{figure}[H]\centering\figura[0.8]{p4_acf_ar1}\caption{ACF de los residuos $u_t$ del AR(1).}\end{figure}
+
+El AR(1) da $\hat\phi=\cf{phiAR}$. Sus residuos $u_t$ siguen con rezagos fuera de las bandas
+(\cf{rezagosFueraAR}), y Ljung--Box con un grado de libertad menos da $Q(6)=\cf{QseisAR}$ ($p=\cf{pseisAR}$, 5 gl) y
+$Q(12)=\cf{QdoceAR}$ ($p=\cf{pdoceAR}$, 11 gl). No alcanzó: los residuos siguen sin ser ruido blanco. El AR(1) solo
+explica la correlación de un día con el anterior, pero lo que vimos en 4.1 es un nivel que persiste durante
+semanas, y eso deja correlación en rezagos más largos, incluido el estacional 6: el efecto de cada día no es un
+monto fijo, sino que crece con el nivel de la serie.
+
+\subsection*{4.3 SARIMA}
+
+\begin{table}[H]\centering\scriptsize\tabla{p4_sarima}\caption{Convergencia y parámetros de S1 y S2.}\end{table}
+
+\paragraph{¿Por qué $s=6$ y no 7?} Porque ajustamos sobre las filas de días abiertos: sin sábados, una semana son 6
+filas y el mismo día de la semana anterior está 6 filas atrás. La suposición se rompe en las semanas con feriados o
+con el cierre de Navidad: ahí la semana tiene 5 filas o menos, y el rezago 6 ya no cae en el mismo día de la semana.
+
+\paragraph{¿Por qué el logaritmo?} La amplitud del patrón semanal crece con el nivel de la serie (las diferencias
+entre jueves y domingo son mayores en noviembre que en febrero): la estacionalidad es multiplicativa, como en la
+descomposición de 3.1--3.2. El logaritmo la vuelve aditiva y estabiliza la varianza, que es cuando FPP2 recomienda
+transformar. \revisar{Revisamos la convergencia en \texttt{mle\_retvals}; para el modelo que no convergió subimos
+\texttt{maxiter} a 500 y la tabla compara los parámetros antes y después.}
+
+\subsection*{4.4 Diagnóstico}
+
+\begin{table}[H]\centering\tabla{p4_diagnostico}\caption{Ljung--Box sobre los residuos (con $m-2$ grados de libertad).}\end{table}
+\begin{figure}[H]\centering\figura[0.95]{p4_acf_sarima}\caption{ACF de los residuos de S1 y S2.}\end{figure}
+
+¿Residuos de ruido blanco al 5\,\%? S1: \cf{ruidoBlancoS1}; S2: \cf{ruidoBlancoS2}. \revisar{S2 deja residuos mucho
+más cercanos a ruido blanco, porque sus dos diferencias quitan el nivel que se mueve y el patrón semanal; S1
+modela el logaritmo alrededor de una media fija y la tendencia de otoño le queda en los residuos.}
+
+\subsection*{4.5 Horizonte largo}
+
+\begin{figure}[H]\centering\figura{p4_horizonte}\caption{Pronósticos de S1 y S2 a 120 días abiertos desde el 30 de septiembre.}\end{figure}
+
+S1 es estacionario: como un AR(1) con $|\phi|<1$, olvida sus choques a ritmo $\phi^h$, así que su pronóstico regresa a
+la media incondicional (con el patrón semanal amortiguándose) y a horizonte largo es una línea plana en el nivel
+promedio de todo el entrenamiento. S2 tiene raíces unitarias: como la caminata aleatoria, no regresa a ningún
+nivel. Su pronóstico repite indefinidamente el último nivel y el último patrón semanal estimados. Ninguno de los
+dos ``sabe'' que viene la temporada navideña, pero S2 al menos parte del nivel reciente.
+
+%======================================================================
+\section{Parte 5: Pronóstico y fuga}
+%======================================================================
+
+\subsection*{5.1 Modelos}
+
+B1 es la media histórica; B2, el último valor del mismo día de la semana; M1, OLS con tendencia lineal e
+indicadoras; M2, OLS con indicadoras, $y_{t-7}$ e $y_{t-14}$. Para M2, si $t-7$ cae en un día cerrado tomamos el mismo
+día de la semana abierto más reciente; $y_{t-14}$ es el mismo día de la semana abierto inmediatamente anterior a ese.
+Comprobamos el caso del enunciado: para el 9 de mayo, $y_{t-7}$ es el 18 de abril.
+
+\paragraph{¿Por qué $y_{t-7}$ sí e $y_{t-1}$ no?} El origen es un domingo y los objetivos están a lo sumo 7 días
+después, así que para cualquier objetivo $t$ el día $t-7$ es el origen o anterior: ya está observado. En cambio, para
+pronosticar el miércoles, $y_{t-1}$ sería el martes, que todavía no ha pasado. Usarlo sería usar el futuro.
+
+\paragraph{¿Cómo usa S1 el rezago 1?} Pronostica recursivamente: el pronóstico del lunes se usa como si fuera el
+valor observado para pronosticar el martes, y así sucesivamente. Por eso el horizonte de cada objetivo es su
+posición entre los días abiertos y el error crece con el horizonte. En cada reajuste de S1 y S2 usamos el
+\texttt{maxiter} de 4.3 y verificamos \texttt{mle\_retvals['converged']}; \revisar{\cf{noConvergio} ajustes no
+convergieron}.
+
+\subsection*{5.2 Tres formas de estimar el error}
+
+\begin{table}[H]\centering\tabla{p5_errores}\caption{MAE y RMSE (en £). (a) validación cruzada aleatoria de 5 folds,
+media $\pm$ desviación estándar en 10 semillas; (b) origen móvil semanal, mayo--septiembre; (c) prueba, origen
+móvil semanal.}\label{tab:err}\end{table}
+
+\paragraph{¿Por qué no (a) para B2, S1 y S2?} Porque los tres dependen del orden de la serie: B2 necesita ``el último''
+valor, y S1 y S2 son recursivos sobre filas consecutivas. Si se sacan días al azar, la historia de entrenamiento
+queda con huecos en cualquier lugar y el ``pasado'' de un día de prueba incluye días que vienen después de él. El
+modelo no se puede ajustar ni pronosticar de forma coherente.
+
+\paragraph{¿Cuál se acerca más a (c)?} Para M2 la más cercana es \cf{masCercaM2} (MAE de M2: (a)
+\cf{maeAM2}, (b) \cf{maeBM2}, (c) \cf{maeCM2}). Pero ninguna se acerca de verdad: para B1, M1 y M2 el
+error de prueba es entre 55\,\% y 120\,\% mayor que cualquiera de las dos estimaciones dentro del entrenamiento,
+porque octubre--diciembre está en otro nivel de ventas.
+
+\subsection*{5.3 ¿Quién gana en prueba?}
+
+\begin{figure}[H]\centering\figura{p5_prueba}\caption{Pronósticos semanales contra la venta real, 3 de octubre -- 8 de diciembre de 2011.}\end{figure}
+
+Gana \cf{ganadorPrueba} (MAE de \cf{maeCB1}, \cf{maeCB2}, \cf{maeCM1}, \cf{maeCM2}, \cf{maeCS1} y \cf{maeCS2} para
+B1, B2, M1, M2, S1 y S2).
+
+Lo que separa a los modelos en prueba es si se adaptan al nivel reciente. La venta de octubre--diciembre gira
+alrededor de £50\,000 diarios. B1 se queda en la media histórica de los días abiertos
+(entre £27\,700 y £31\,400 según el origen) y es por mucho el peor. M1 y M2 siguen bien el patrón semanal (la figura muestra que suben y bajan
+con la serie), pero quedan sistemáticamente por debajo de ella: M1 extrapola una tendencia lineal estimada sobre
+meses casi planos, y en M2 los coeficientes de $y_{t-7}$ e $y_{t-14}$ estimados en el entrenamiento suman apenas 0.23
+(0.17 y 0.06), así que el pronóstico le hace poco caso a la semana anterior y regresa hacia el promedio de cada día. B2 copia la semana anterior completa: arrastra el nivel nuevo y por eso
+tiene el menor error entre los modelos sin SARIMA, a pesar de que copia también los picos aislados (el día de
+£110\,600 del 14 de noviembre lo repite el 21, cuando la venta real fue de £47\,000).
+
+\revisar{En cuanto a S1 y S2: S1 es estacionario y, como vimos en 4.5, regresa a la media del año, así que debería
+comportarse como B1 y quedar entre los peores. S2, con sus dos diferencias, se ancla al nivel reciente como B2,
+pero promedia las semanas anteriores en vez de copiar solo la última, y modela el patrón semanal en escala
+multiplicativa; si en 4.4 deja residuos de ruido blanco, es el candidato natural a ganar.}
+
+\subsection*{5.4 La trampa}
+
+\begin{table}[H]\centering\tabla{p5_trampa}\caption{M2 con y sin la media móvil centrada de 7 días como predictor.}\end{table}
+
+Con la media móvil, M2 ``mejora'' en (a) y en (b) (MAE (b): \cf{maeBM2} sin ella, \cf{maeBTrampa} con ella). Es una
+ilusión: la media móvil centrada del día $t$ promedia $y_{t-3},\dots,y_{t+3}$, así que contiene al propio $y_t$ y a
+tres días futuros. El predictor le pasa al modelo parte de la respuesta.
+
+El origen móvil no lo detecta si la media móvil se calcula una sola vez sobre toda la serie, porque el origen
+móvil solo controla qué \emph{filas} entran al ajuste, no qué información hay \emph{dentro} de cada columna. La
+columna ya fue construida con datos posteriores al origen, y la fuga entra por ahí.
+
+Y (c) no se puede calcular sin hacer trampa: el domingo de origen, para pronosticar el jueves, necesitaríamos la
+media móvil del jueves, que requiere las ventas del lunes al domingo siguiente, que todavía no ocurren. Además, la
+media móvil de los últimos días de diciembre requiere datos que ni siquiera están en la base.
+
+\subsection*{5.5 Por qué todas las estimaciones se quedan cortas}
+
+Hay dos causas. La primera viene de \textbf{cómo se partieron los datos}. La validación cruzada aleatoria pone en
+entrenamiento días vecinos a los de prueba (el martes y el jueves de la misma semana), así que el modelo ``ve'' el
+nivel de esa semana; además, los rezagos de M2 pueden venir de días que en la realidad todavía no ocurrieron. Esa
+causa \emph{se arregla} con una mejor validación: el origen móvil (b) respeta el tiempo y por eso es más honesto
+que (a).
+
+La segunda es que \textbf{la serie cambió}. Octubre--diciembre es la temporada alta de un mayorista de artículos de
+regalo: el nivel de ventas es más alto y más volátil que en cualquier mes del entrenamiento. Ninguna validación
+dentro del entrenamiento puede medir un error en condiciones que nunca observó; eso \emph{no se arregla} con una
+mejor partición, solo con datos de otras temporadas altas.
+
+Con un solo año no se puede estimar la estacionalidad anual. Para estimar un patrón con periodo de un año
+necesitamos verlo repetirse: con un año hay una sola observación de cada mes, y es imposible distinguir ``noviembre
+siempre es alto'' de ``la tienda está creciendo'' o de ``este noviembre fue raro''.
+
+%======================================================================
+\section{Parte 6: Detrás de la serie hay clientes: RFM}
+%======================================================================
+
+\subsection*{6.1 R, F y M al 1 de octubre}
+
+Con los datos limpios que tienen \texttt{CustomerID} y solo las transacciones anteriores al 1 de octubre de 2011,
+hay \cf{nClientesRFM} clientes con al menos una factura de venta. La recencia son los días entre su última factura
+de venta y el 1 de octubre; la frecuencia, el número de facturas de venta distintas, y el monto, la venta neta
+(ventas menos cancelaciones). \cf{nSoloCanc} clientes solo tienen cancelaciones antes del corte (de compras
+anteriores al inicio de los datos) y no entran, porque no tienen recencia.
+
+\cf{nMcero} clientes tienen $M\le0$: cancelaron tanto o más de lo que compraron. Entre ellos está el cliente 12346 del pedido de 74\,215 frascos
+anulado en 1.4, que queda con $M=0$. Los conservamos: el enunciado pide incluirlos en los puntajes, y
+quedan naturalmente en el quintil más bajo de $M$. No serían candidatos a una campaña de ``mejores clientes''.
+
+\begin{table}[H]\centering\small\tabla{p6_describe}\caption{Distribución de R (días), F (facturas) y M (£).}\end{table}
+
+No usamos nada posterior al 1 de octubre porque en 6.3 evaluamos si el RFM anticipa quién compra después de esa
+fecha. Si el RFM usara compras de octubre, un cliente que compró en octubre tendría recencia baja \emph{porque}
+compró: estaríamos prediciendo el resultado con el resultado (la misma fuga de 5.4).
+
+\subsection*{6.2 Puntajes por quintiles}
+
+F es un conteo con muchísimos empates: el \cf{pctFuno} de los clientes tiene exactamente una factura. Los puntos de
+corte de los quintiles coinciden (el primer y el segundo quintil son ambos $F=1$), y \texttt{pd.qcut} falla por
+bordes repetidos. Desempatamos al azar como pide el enunciado: clientes ordenados por \texttt{CustomerID},
+barajados con \texttt{default\_rng(2026)} y \texttt{qcut} sobre \texttt{rank(method='first')}; lo mismo para R
+(con signo invertido, para que 5 sea el más reciente) y M.
+
+Eso implica que dos clientes con la misma F pueden quedar con puntajes distintos solo por el orden del barajado. La
+diferencia de puntaje entre ellos no dice nada de su comportamiento; es ruido que agregamos para que los quintiles
+tengan el mismo tamaño. Cambiar la semilla cambiaría a quién le toca cada puntaje.
+
+\subsection*{6.3 ¿Qué dimensión separa mejor?}
+
+\begin{table}[H]\centering\small\tabla{p6_tasa_compra}\quad\tabla{p6_auc}\caption{Izquierda: fracción de clientes que
+compró entre el 1 de octubre y el 8 de diciembre, por puntaje. Derecha: AUC con los valores crudos.}\end{table}
+\begin{figure}[H]\centering\figura[0.7]{p6_tasa_compra}\caption{Tasa de recompra por puntaje.}\end{figure}
+
+En total, el \cf{tasaCompra} de los clientes volvió a comprar. La dimensión que mejor separa por AUC es
+\cf{mejorDim} (AUC de R: \cf{aucR}; F: \cf{aucF}; M: \cf{aucM}; suma de puntajes: \cf{aucSuma}). La tasa de recompra
+crece con los tres puntajes, pero F tiene el mayor recorrido: del 32\,\% en el puntaje 1 al 86\,\% en el 5. Un
+cliente que compra seguido es el que vuelve. R separa bien abajo (28\,\% contra 66\,\%), pero se satura: los
+puntajes 4 y 5 compran igual, porque haber comprado hace 10 o hace 30 días da lo mismo en un horizonte de diez
+semanas. En F, los puntajes 1 y 2 compran casi igual (32\,\% y 31\,\%) porque ambos son casi solo clientes con
+$F=1$ repartidos al azar: es el desempate de 6.2 en acción. La suma de los tres puntajes es el mejor
+clasificador, pero apenas mejora a F solo.
+
+\subsection*{6.4 Campeones}
+
+Los campeones (puntaje 4 o 5 en R, F y M) son \cf{nCampeones} clientes, el \cf{fracCampeones} de la base, y generaron
+el \cf{shareCampeones} de la venta neta del 1 de octubre al 8 de diciembre de todos los clientes con
+\texttt{CustomerID} (\cf{totalPost}), incluidos los nuevos.
+
+\begin{table}[H]\centering\tabla{p6_grupos}\caption{Venta neta del 1 de octubre al 8 de diciembre por grupo.}\end{table}
+
+\subsection*{6.5 Clientes nuevos}
+
+\cf{nNuevos} clientes compraron por primera vez entre el 1 de octubre y el 8 de diciembre y generaron el
+\cf{shareNuevos} de la venta neta del periodo. Ningún análisis RFM, ni ningún modelo construido cliente por cliente
+con la historia hasta el 1 de octubre, puede pronosticar esa venta: esos clientes no existen en la tabla del modelo.
+No tienen R, F ni M, y un modelo que suma pronósticos por cliente les asigna cero.
+
+En el vocabulario de FPP2, la Parte 5 es un pronóstico \emph{top-down}: pronostica el total, y el total sí incluye a
+los clientes nuevos, porque la llegada de clientes nuevos en el pasado ya está en la serie (por ejemplo, en la
+subida de otoño). Un modelo cliente por cliente es \emph{bottom-up}: suma los pronósticos de cada cliente conocido y
+pierde, por construcción, la venta de clientes que aún no conoce. Para el proyecto, donde compararemos ambos
+enfoques, esto significa que el bottom-up tiene un sesgo hacia abajo de aproximadamente el \cf{shareNuevos} en este
+periodo, a menos que se le agregue un componente aparte para clientes nuevos. A cambio, el bottom-up dice
+\emph{quién} va a comprar, que es lo que el top-down no puede decir.
+
+%======================================================================
+\section*{Uso de herramientas de IA}
+%======================================================================
+Usamos un modelo de lenguaje (Claude) como apoyo para entender el enunciado, proponer la estructura del código y
+redactar borradores de las explicaciones. Ejecutamos todo el código con los datos originales y revisamos cada
+cifra e interpretación contra los resultados del notebook.
+
+\begin{thebibliography}{9}
+\bibitem{uci} D. Chen. \emph{Online Retail} [conjunto de datos]. UCI Machine Learning Repository, 2015.
+\bibitem{chen} D. Chen, S. L. Sain y K. Guo. Data mining for the online retail industry: A case study of RFM
+model-based customer segmentation using data mining. \emph{Journal of Database Marketing \& Customer Strategy
+Management}, 19(3):197--208, 2012.
+\bibitem{fpp2} R. J. Hyndman y G. Athanasopoulos. \emph{Forecasting: Principles and Practice}, 2a ed. OTexts, 2018.
+\bibitem{tsay} R. S. Tsay. \emph{Analysis of Financial Time Series}, 2a ed. Wiley, 2005.
+\end{thebibliography}
+
+\end{document}
